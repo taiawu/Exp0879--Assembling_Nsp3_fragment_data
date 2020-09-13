@@ -1,0 +1,344 @@
+---
+title: "Assembling Fragment data"
+output: html_notebook
+---
+
+This notebook contains work done to assemble data from Nsp3 fragment test and all associated experiments for the first paper.
+Analysis
+
+```{r}
+library(quantmod) # contains the findValleys function, which maybe we should just extract and put verbatim in a source file instead of loading this whole thing...?
+library(minpack.lm) # contains the nlsLM function, which we use for our fitting
+library(modelr) # used in both the data modeling and the analysis model fitting 
+library(SciViews) # contains the ln function used in the data modeling
+library(signal) # contains the savistky golay filter (savgolfilt), used to generate the first derivative data in both data modeling and analysis model fitting  
+library(ggrepel) # for plot labeling
+library(tidyverse)
+source("scripts/analysis.R")
+source("scripts/plotting.R")
+source("scripts/screen_analysis.R")
+filter <- dplyr::filter # filter is masked from dplyr by signal
+as_vector <- purrr::as_vector
+```
+
+```{r}
+convert_numerics <- function( vec ) {
+    
+    if(all(varhandle::check.numeric(vec))){
+        # convert the vector to numeric
+        vec <- as.numeric(vec)
+    }
+    vec
+}
+```
+
+```{r}
+find_tmas_879 <- function(by_variable_raw, 
+                      low_T = 25,
+                      high_T = 94,
+                      n_meas = 69,
+                      filter_criteria) {
+  # get the filtering and smoothing parameters
+  n2r <- make_temp_n2r(range(low_T:high_T)) 
+  win3d <- floor(3/((n2r(1) - n2r(0))/n_meas))
+  if ( win3d < 5 ) { win3d <<- 5 }
+  
+  peak_finder_nest <<- make_peak_finder_nest( win3d )
+  # sgfilt_nest <- sgfilt_set_n(n_ = find_sgolay_width( win3d ))
+  
+  sgfilt_nest <- sgfilt_set_n(n_ = 13)
+  
+  # fit only the channels which have signal
+  by_variable <- by_variable_raw
+  
+  
+  df_tms <- by_variable %>% #df_int %>% # add the first derivative Tms
+    plyr::mutate(sgd1 = purrr::map(data, sgfilt_nest, m_ = 1)) %>% # add the first derivative data
+    plyr::mutate(dRFU_tma = as_vector(purrr::map2(data, sgd1, Tm_by_dRFU))) # find the dRFU tmas
+  
+  # fit to all models        
+  start_pars <- get_start_pars(by_variable)
+  s1_list <- model_all(s1_model, "s1_pred", start_pars, win3d) # requires "well" and "condition" columns
+  s1_d_list <- model_all(s1_d_model, "s1_d_pred", start_pars, win3d)
+  s2_list <- model_all(s2_model, "s2_pred", start_pars, win3d)
+  s2_d_list <- model_all(s2_d_model, "s2_d_pred", start_pars, win3d)
+  
+  save_list <- list(by_variable = by_variable,
+                    df_tms = df_tms,
+                    start_pars = start_pars,
+                    s1_list = s1_list,
+                    s1_d_list = s1_d_list,
+                    s2_list = s2_list,
+                    s2_d_list = s2_d_list)
+}
+```
+
+
+
+```{r}
+process_screen_879 <- function(df_raw,
+                           save_path = "") {
+  
+    low_T <- 25
+    high_T <- 94
+    n_meas <- 69
+    ignore_vars <- ""
+    fit_if <- c("TAMRA")
+    save_fits <- TRUE
+    save_name <- "fits.rds"
+    temp_range <- c(25, 85)
+    quick_look <- TRUE
+  # 
+  # df_raw <- df_raw_in %>%
+  #           mutate(variable = condition) %>%
+  #           group_by(variable)  %>%
+  #           mutate(Temperature_norm = BBmisc::normalize(Temperature, method = "range", range = c(0,1)), # normalize each trace 0 to 1
+  #                  value_norm = BBmisc::normalize(value, method = "range", range = c(0,1))) %>%
+  #           ungroup()
+    
+    by_variable <- df_raw %>%
+    nest(data = c(Temperature, value, channel, Temperature_norm, value_norm))
+  
+  fits <- find_tmas_879(by_variable_raw = by_variable,
+                    low_T = low_T,
+                    high_T = high_T,
+                    n_meas = 69)  #### THIS NEEDS TO BE FIXED! Sometimes throws an error in sgolayfilt odd requirement if set dynamically #df_raw$Temperature %>% unique() %>% length(),
+
+  outlist <- list(df_raw = df_raw,
+                  by_variable = by_variable,
+                  fits = fits)
+
+
+  if (save_fits != FALSE) { paste0(save_path, save_name)  %>% write_rds( . , x = outlist) }
+  print(save_path)
+  outlist
+  
+}
+
+```
+
+
+Read in formatted data from all processed experiments
+```{r}
+exp_info <- readxl::read_excel("Exp0879--20200912_fragment_exp_to_process.xlsx") # organizer of the experiments to be processed in this experiment
+
+exp_folders <- exp_info$`Exp title` %>%  # make full directories for these experiments
+               paste0( "~/Box Sync/data/", . , "/for_Exp0879") 
+
+rds_files <- lapply( exp_folders, dir, full.names = T, pattern = "processed_for_Exp0879.rds") %>%   # extract names of all fiels to be read
+             flatten()  %>% 
+             as_vector()
+
+rds_names <- lapply( exp_folders, dir, full.names = F, pattern = "processed_for_Exp0879.rds") %>%   # remove .rds names, to use as list names for the experiments
+             flatten() %>%
+              as_vector() %>%
+             gsub(x = . , pattern = "--processed_for_Exp0879.rds", replacement = "")
+
+dfs_list <- lapply(rds_files, readRDS) # read in all pre-processed experiments
+
+names(dfs_list) <-  rds_names # set the ist element names as the experiment
+
+write_rds(x = dfs_list, "Exp0879--20200912_all_dfs_list_no_empties.rds") # write this list to an rds in this directory ## THIS IS TOO LARGE TO UPLOAD TO GITHUB!!!!
+```
+
+Isolate just the data relevant for plotting
+```{r}
+dfs_protein_EBPS <- map(dfs_list, ~filter(.x, protein %in% c("SP0148", "SP0150", "Buffer")) ) # remove any empty wells (in this script, this should already be done)
+
+dfs_protein_TAMRA <- map(dfs_protein_EBPS, ~filter(.x, protein %in% c("SP0148", "SP0150")) ) %>% 
+                      map( . , ~filter(.x, channel_f == "TAMRA") ) %>% # just the channel of interest
+                      map( . , ~filter(.x, protein != "Buffer") ) # just the protein-containing wells
+  
+```
+
+Analyze
+```{r}
+all_processed <- map2(dfs_protein_TAMRA, 
+                      dfs_protein_TAMRA %>% names() %>% paste0("analyzed/", . , "_tma_analysis_results_"),
+                      process_screen_879)
+
+```
+
+Highlighting poor fits/odd curves
+```{r}
+#install.packages("PupillometryR")
+# library(PupillometryR)
+
+# library(readr)
+# library(tidyr)
+# library(ggplot2)
+library(Hmisc)
+# library(plyr)
+# library(RColorBrewer)
+library(reshape2)
+
+mini_test <- dfs_protein_TAMRA$Exp0827
+
+
+all_TAMRA <- dfs_protein_TAMRA %>%
+              map(. , ~select(.x, c(Temperature, plate_number, value, value_norm)) ) %>%
+            map(. , ~filter(.x, dye != "T004") ) %>%
+              bind_rows()
+
+all_25 <- all_TAMRA %>%
+           filter(Temperature == 25) 
+# borrowed from Paula Andrea Martinez's post mentioned above
+g <- 
+  ggplot(data = all_25, 
+         aes(x = plate_number, 
+             y = value, 
+             fill = plate_number)) +
+  geom_flat_violin(position = position_nudge(x = .2, y = 0), alpha = .8) +
+  geom_point(aes(y = value, color = plate_number), 
+             position = position_jitter(width = .15), size = .5, alpha = 0.8) +
+  ylim(c(0, max(all_25$value))) +
+  scale_y_continuous(trans = "log2")
+  # geom_point(data = mini_test, aes(x = plate_number, y = mean), 
+  #            position = position_nudge(x = 0.3), size = 2.5) +
+  # geom_errorbar(data = mini_test, aes(ymin = lower, ymax = upper, y = mean), 
+  #               position = position_nudge(x = 0.3), width = 0) +
+  # expand_limits(x = 5.25) +
+  # guides(fill = FALSE) +
+  # guides(color = FALSE) +
+  # coord_flip() + 
+  # scale_color_brewer(palette = "Spectral") +
+  # scale_fill_brewer(palette = "Spectral") +
+  # theme_bw() 
+
+g
+# +
+#   raincloud_theme
+                         
+                         my_datal <- melt(my_data, id.vars = c("Participant"), measure.vars = c("AngerUH", "DisgustUH", "FearUH", "HappyUH"), variable.name = "EmotionCondition", value.name = "Sensitivity")
+
+# call out by the starting RFU in the raw data
+mini_test %>%
+  filter(Temperature == 25) %>%
+  ggplot() +
+  PupillometryR::geom_flat_violin() 
+ # geom_density(aes(value))
+
+# call out by the residuals in the fits
+
+```
+
+
+Post analysis cleaning
+```{r}
+# take one screening list
+
+# take binnned mean of Tma 1 and Tma 2
+
+# re-assign Tma1 and Tma2 based on whichever one a Tma is closer to 
+
+```
+
+
+Make files necessary to isolate paper 1-relevant experiments
+```{r}
+# mapping ZINCid to 4-digit tube label
+# % triton by experiment
+```
+
+
+Determine DMSO and ADP ribose values from all experiments
+```{r}
+# extract DMSO and ADP ribose data only
+
+# plot the tmas, grouped by experiment
+
+# group based on buffer and DMSO/ADPribose and average
+
+```
+
+ATP and ADP barely stabilize
+```{r}
+# extract DMSO and ADP ribose data only
+
+# plot the tmas, grouped by experiment
+
+# group based on buffer and DMSO/ADPribose and average
+
+```
+
+
+Main figure: Publication-quality ADP, ATP, ADP ribose dose-response figure
+```{r}
+# panel 1: raw dara
+
+# panel 2: tmas
+
+# statistical tests 
+
+```
+
+SI-quality figure: Triton X-100 destabilizes the protein
+```{r}
+# panel 1: raw dara
+
+# panel 2: tmas
+
+# statistical tests 
+
+```
+
+SI-quality figure: Higher protein concentrations destabilize the protein
+```{r}
+# panel 1: raw dara
+
+# panel 2: tmas
+
+# statistical tests 
+
+```
+
+SI-quality figure: dose-response for all paper 1 compounds (60 compounds)
+```{r}
+# panel 1.1: raw data, for xtal hits
+
+# panel 1.2: raw data, for non xtal hits
+
+# panel 2.1: tmas, for xtal hits
+
+# panel 2.2: tmas, for non xtal hits
+
+# statistical tests: which compounds induce a significant thermal shift?
+```
+
+SI-quality figure: Comparison of xtal results and DSF results
+```{r}
+### Determine:
+# fraction enrichment
+# statistical test to say how good of a parameter this is 
+
+# panel 1: for primary transition
+
+# panel 2: for secondary transition
+
+# panel 3: for initial fluorescence
+
+# panel 4: for total fluorescence
+
+# panel 5: for BIC
+
+```
+
+Main figure: dose-response for 
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
