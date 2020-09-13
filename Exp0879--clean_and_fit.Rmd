@@ -1,0 +1,171 @@
+---
+title: "Assembling Fragment data"
+output: html_notebook
+---
+
+This notebook performs dRFU and model fitting on multiple Nsp3 experiments pooled from separate directories.
+
+Later notebooks will:
+Clean analysis results
+Make plots
+Make tables
+Calculate relevant statistics
+
+```{r}
+library(quantmod) # contains the findValleys function, which maybe we should just extract and put verbatim in a source file instead of loading this whole thing...?
+library(minpack.lm) # contains the nlsLM function, which we use for our fitting
+library(modelr) # used in both the data modeling and the analysis model fitting 
+library(SciViews) # contains the ln function used in the data modeling
+library(signal) # contains the savistky golay filter (savgolfilt), used to generate the first derivative data in both data modeling and analysis model fitting  
+library(ggrepel) # for plot labeling
+library(tidyverse)
+source("scripts/analysis.R")
+source("scripts/plotting.R")
+source("scripts/screen_analysis.R")
+filter <- dplyr::filter # filter is masked from dplyr by signal
+as_vector <- purrr::as_vector
+```
+
+```{r}
+
+convert_numerics <- function( vec ) {
+    
+    if(all(varhandle::check.numeric(vec))){
+        # convert the vector to numeric
+        vec <- as.numeric(vec)
+    }
+    vec
+}
+
+find_tmas_879 <- function(by_variable_raw, 
+                      low_T = 25,
+                      high_T = 94,
+                      n_meas = 69,
+                      filter_criteria) {
+  # get the filtering and smoothing parameters
+  n2r <- make_temp_n2r(range(low_T:high_T)) 
+  win3d <- floor(3/((n2r(1) - n2r(0))/n_meas))
+  if ( win3d < 5 ) { win3d <<- 5 }
+  
+  peak_finder_nest <<- make_peak_finder_nest( win3d )
+  # sgfilt_nest <- sgfilt_set_n(n_ = find_sgolay_width( win3d ))
+  
+  sgfilt_nest <- sgfilt_set_n(n_ = 13)
+  
+  # fit only the channels which have signal
+  by_variable <- by_variable_raw
+  
+  
+  df_tms <- by_variable %>% #df_int %>% # add the first derivative Tms
+    plyr::mutate(sgd1 = purrr::map(data, sgfilt_nest, m_ = 1)) %>% # add the first derivative data
+    plyr::mutate(dRFU_tma = as_vector(purrr::map2(data, sgd1, Tm_by_dRFU))) # find the dRFU tmas
+  
+  # fit to all models        
+  start_pars <- get_start_pars(by_variable)
+  s1_list <- model_all(s1_model, "s1_pred", start_pars, win3d) # requires "well" and "condition" columns
+  s1_d_list <- model_all(s1_d_model, "s1_d_pred", start_pars, win3d)
+  s2_list <- model_all(s2_model, "s2_pred", start_pars, win3d)
+  s2_d_list <- model_all(s2_d_model, "s2_d_pred", start_pars, win3d)
+  
+  save_list <- list(by_variable = by_variable,
+                    df_tms = df_tms,
+                    start_pars = start_pars,
+                    s1_list = s1_list,
+                    s1_d_list = s1_d_list,
+                    s2_list = s2_list,
+                    s2_d_list = s2_d_list)
+}
+
+```
+
+```{r}
+process_screen_879 <- function(df_raw,
+                           save_path = "") {
+  
+                              low_T <- 25
+                              high_T <- 94
+                              n_meas <- 69
+                              ignore_vars <- ""
+                              fit_if <- c("TAMRA")
+                              save_fits <- TRUE
+                              save_name <- "fits.rds"
+                              temp_range <- c(25, 85)
+                              quick_look <- TRUE
+                              
+                              by_variable <- df_raw %>%
+                              nest(data = c(Temperature, value, channel, Temperature_norm, value_norm))
+                            
+                            fits <- find_tmas_879(by_variable_raw = by_variable,
+                                              low_T = low_T,
+                                              high_T = high_T,
+                                              n_meas = 69)  #### THIS NEEDS TO BE FIXED! Sometimes throws an error in sgolayfilt odd requirement if set dynamically #df_raw$Temperature %>% unique() %>% length(),
+                          
+                            outlist <- list(df_raw = df_raw,
+                                            by_variable = by_variable,
+                                            fits = fits)
+                          
+                          
+                            if (save_fits != FALSE) { paste0(save_path, save_name)  %>% write_rds( . , x = outlist) }
+                            print(save_path)
+                            outlist
+                            
+                          }
+
+```
+
+Read in formatted data from all processed experiments
+```{r}
+# The folder names holding the files to be read are given manually
+  exp_info <- readxl::read_excel("Exp0879--20200912_fragment_exp_to_process.xlsx") # organizer of the experiments to be processed in this experiment
+  
+  exp_folders <- exp_info$`Exp title` %>%  
+                 paste0( "~/Box Sync/data/", . , "/for_Exp0879") 
+  
+# Extract the correct file names from these folders by regex in the file name
+  # Full directories
+  rds_files <- lapply( exp_folders, dir, full.names = T, pattern = "processed_for_Exp0879.rds") %>%   # extract names of all fiels to be read
+               flatten()  %>% 
+               as_vector()
+  
+  # Unique filename components
+  rds_names <- lapply( exp_folders, dir, full.names = F, pattern = "processed_for_Exp0879.rds") %>%   # remove .rds names, to use as list names for the experiments
+               flatten() %>%
+                as_vector() %>%
+               gsub(x = . , pattern = "--processed_for_Exp0879.rds", replacement = "")
+
+# Read all RDSs from directories
+  dfs_list <- lapply(rds_files, readRDS) # read in all pre-processed experiments
+
+# Name the list elements
+  names(dfs_list) <-  rds_names # set the ist element names as the experiment
+
+dfs_protein_EBPS <- map(dfs_list, ~filter(.x, protein %in% c("SP0148", "SP0150", "Buffer")) ) # remove any empty wells (in this script, this should already be done)
+
+# Isolate just the data relevant for analysis
+dfs_protein_TAMRA <- map(dfs_protein_EBPS, ~filter(.x, protein %in% c("SP0148", "SP0150")) ) %>% 
+                      map( . , ~filter(.x, channel_f == "TAMRA") ) %>% # just the channel of interest
+                      map( . , ~filter(.x, protein != "Buffer") ) # just the protein-containing wells
+ 
+  # Save the full list of read RDSs
+  write_rds(x = dfs_protein_EBPS, "analyzed/Exp0879--20200912_all_dfs_list_no_empties.rds") # write this list to an rds in this directory ## THIS IS TOO LARGE TO UPLOAD TO GITHUB!!!!
+  write_rds(x = dfs_protein_TAMRA, "analyzed/Exp0879--20200912_all_dfs_as_input_to_analysis.rds") # write this list to an rds in this directory ## THIS IS TOO LARGE TO UPLOAD TO GITHUB!!!!
+  
+```
+
+Analyze
+```{r}
+all_processed <- map2(dfs_protein_TAMRA, 
+                      dfs_protein_TAMRA %>% names() %>% paste0("analyzed/", . , "_tma_analysis_results_"),
+                      process_screen_879)
+```
+
+
+
+
+
+
+
+
+
+
+
