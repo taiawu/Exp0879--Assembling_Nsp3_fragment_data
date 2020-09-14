@@ -22,6 +22,7 @@ as_vector <- purrr::as_vector
 ```
 
 ```{r}
+
 convert_numerics <- function( vec ) {
     
     if(all(varhandle::check.numeric(vec))){
@@ -30,9 +31,7 @@ convert_numerics <- function( vec ) {
     }
     vec
 }
-```
 
-```{r}
 find_tmas_879 <- function(by_variable_raw, 
                       low_T = 25,
                       high_T = 94,
@@ -71,83 +70,80 @@ find_tmas_879 <- function(by_variable_raw,
                     s2_list = s2_list,
                     s2_d_list = s2_d_list)
 }
+
 ```
-
-
 
 ```{r}
 process_screen_879 <- function(df_raw,
                            save_path = "") {
   
-    low_T <- 25
-    high_T <- 94
-    n_meas <- 69
-    ignore_vars <- ""
-    fit_if <- c("TAMRA")
-    save_fits <- TRUE
-    save_name <- "fits.rds"
-    temp_range <- c(25, 85)
-    quick_look <- TRUE
-  # 
-  # df_raw <- df_raw_in %>%
-  #           mutate(variable = condition) %>%
-  #           group_by(variable)  %>%
-  #           mutate(Temperature_norm = BBmisc::normalize(Temperature, method = "range", range = c(0,1)), # normalize each trace 0 to 1
-  #                  value_norm = BBmisc::normalize(value, method = "range", range = c(0,1))) %>%
-  #           ungroup()
-    
-    by_variable <- df_raw %>%
-    nest(data = c(Temperature, value, channel, Temperature_norm, value_norm))
-  
-  fits <- find_tmas_879(by_variable_raw = by_variable,
-                    low_T = low_T,
-                    high_T = high_T,
-                    n_meas = 69)  #### THIS NEEDS TO BE FIXED! Sometimes throws an error in sgolayfilt odd requirement if set dynamically #df_raw$Temperature %>% unique() %>% length(),
-
-  outlist <- list(df_raw = df_raw,
-                  by_variable = by_variable,
-                  fits = fits)
-
-
-  if (save_fits != FALSE) { paste0(save_path, save_name)  %>% write_rds( . , x = outlist) }
-  print(save_path)
-  outlist
-  
-}
+                              low_T <- 25
+                              high_T <- 94
+                              n_meas <- 69
+                              ignore_vars <- ""
+                              fit_if <- c("TAMRA")
+                              save_fits <- TRUE
+                              save_name <- "fits.rds"
+                              temp_range <- c(25, 85)
+                              quick_look <- TRUE
+                              
+                              by_variable <- df_raw %>%
+                              nest(data = c(Temperature, value, channel, Temperature_norm, value_norm))
+                            
+                            fits <- find_tmas_879(by_variable_raw = by_variable,
+                                              low_T = low_T,
+                                              high_T = high_T,
+                                              n_meas = 69)  #### THIS NEEDS TO BE FIXED! Sometimes throws an error in sgolayfilt odd requirement if set dynamically #df_raw$Temperature %>% unique() %>% length(),
+                          
+                            outlist <- list(df_raw = df_raw,
+                                            by_variable = by_variable,
+                                            fits = fits)
+                          
+                          
+                            if (save_fits != FALSE) { paste0(save_path, save_name)  %>% write_rds( . , x = outlist) }
+                            print(save_path)
+                            outlist
+                            
+                          }
 
 ```
-
 
 Read in formatted data from all processed experiments
 ```{r}
-exp_info <- readxl::read_excel("Exp0879--20200912_fragment_exp_to_process.xlsx") # organizer of the experiments to be processed in this experiment
+# The folder names holding the files to be read are given manually
+  exp_info <- readxl::read_excel("Exp0879--20200912_fragment_exp_to_process.xlsx") # organizer of the experiments to be processed in this experiment
+  
+  exp_folders <- exp_info$`Exp title` %>%  
+                 paste0( "~/Box Sync/data/", . , "/for_Exp0879") 
+  
+# Extract the correct file names from these folders by regex in the file name
+  # Full directories
+  rds_files <- lapply( exp_folders, dir, full.names = T, pattern = "processed_for_Exp0879.rds") %>%   # extract names of all fiels to be read
+               flatten()  %>% 
+               as_vector()
+  
+  # Unique filename components
+  rds_names <- lapply( exp_folders, dir, full.names = F, pattern = "processed_for_Exp0879.rds") %>%   # remove .rds names, to use as list names for the experiments
+               flatten() %>%
+                as_vector() %>%
+               gsub(x = . , pattern = "--processed_for_Exp0879.rds", replacement = "")
 
-exp_folders <- exp_info$`Exp title` %>%  # make full directories for these experiments
-               paste0( "~/Box Sync/data/", . , "/for_Exp0879") 
+# Read all RDSs from directories
+  dfs_list <- lapply(rds_files, readRDS) # read in all pre-processed experiments
 
-rds_files <- lapply( exp_folders, dir, full.names = T, pattern = "processed_for_Exp0879.rds") %>%   # extract names of all fiels to be read
-             flatten()  %>% 
-             as_vector()
+# Name the list elements
+  names(dfs_list) <-  rds_names # set the ist element names as the experiment
 
-rds_names <- lapply( exp_folders, dir, full.names = F, pattern = "processed_for_Exp0879.rds") %>%   # remove .rds names, to use as list names for the experiments
-             flatten() %>%
-              as_vector() %>%
-             gsub(x = . , pattern = "--processed_for_Exp0879.rds", replacement = "")
-
-dfs_list <- lapply(rds_files, readRDS) # read in all pre-processed experiments
-
-names(dfs_list) <-  rds_names # set the ist element names as the experiment
-
-write_rds(x = dfs_list, "Exp0879--20200912_all_dfs_list_no_empties.rds") # write this list to an rds in this directory ## THIS IS TOO LARGE TO UPLOAD TO GITHUB!!!!
-```
-
-Isolate just the data relevant for plotting
-```{r}
 dfs_protein_EBPS <- map(dfs_list, ~filter(.x, protein %in% c("SP0148", "SP0150", "Buffer")) ) # remove any empty wells (in this script, this should already be done)
 
+# Isolate just the data relevant for analysis
 dfs_protein_TAMRA <- map(dfs_protein_EBPS, ~filter(.x, protein %in% c("SP0148", "SP0150")) ) %>% 
                       map( . , ~filter(.x, channel_f == "TAMRA") ) %>% # just the channel of interest
                       map( . , ~filter(.x, protein != "Buffer") ) # just the protein-containing wells
+ 
+  # Save the full list of read RDSs
+  write_rds(x = dfs_protein_EBPS, "analyzed/Exp0879--20200912_all_dfs_list_no_empties.rds") # write this list to an rds in this directory ## THIS IS TOO LARGE TO UPLOAD TO GITHUB!!!!
+  write_rds(x = dfs_protein_TAMRA, "analyzed/Exp0879--20200912_all_dfs_as_input_to_analysis.rds") # write this list to an rds in this directory ## THIS IS TOO LARGE TO UPLOAD TO GITHUB!!!!
   
 ```
 
@@ -156,7 +152,6 @@ Analyze
 all_processed <- map2(dfs_protein_TAMRA, 
                       dfs_protein_TAMRA %>% names() %>% paste0("analyzed/", . , "_tma_analysis_results_"),
                       process_screen_879)
-
 ```
 
 Highlighting poor fits/odd curves
