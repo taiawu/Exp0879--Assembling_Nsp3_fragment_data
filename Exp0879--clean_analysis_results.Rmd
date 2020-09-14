@@ -21,13 +21,13 @@ To be performed by later notebooks:
 library(tidyverse)
 
 convert_numerics <- function( vec ) {
-    
-    if(all(varhandle::check.numeric(vec))){
-        # convert the vector to numeric
-        vec <- as.numeric(vec)
-    }
-    vec
-}
+  
+            if(all(varhandle::check.numeric(vec))){
+                # convert the vector to numeric
+                vec <- as.numeric(vec)
+            }
+            vec
+        }
 
 get_upper_whisker <- function(IQR_coef = 1.5, quant_col) {
   IQR_val <- stats::IQR({{quant_col}}) # <- (quantile({{quant_col}}, probs = 0.75) - quantile({{quant_col}}, probs = 0.25))
@@ -35,7 +35,57 @@ get_upper_whisker <- function(IQR_coef = 1.5, quant_col) {
   
   top_hinge + IQR_coef * IQR_val
 }
+
+
+# well is unique here! use that
+merge_elements <- function( in_list ) { # this runction could use some work to be more flexible
+  
+   df_list <- c("tm_models_all", "df_BIC", "model")
+    model_list <- c("s1_list", "s1_d_list", "s2_list", "s2_d_list")
+  
+  out <- list()
+  
+  for (df_element in df_list) {
+
+    int <- lapply(model_list, function(x) { in_list$fits[[x]][[df_element]] %>%
+                                            mutate(x, which_model = x)})  %>%
+          # lapply( . , function(x) { mutate(x, which_model = model_list)} ) %>%
+              bind_rows() # bind together extracted df_element from all four models
+
+    out <- list(out, int) # add that df_element to a list
+    
+  }
+
+ dRFU_tmas  <- lapply(model_list, function(x) in_list$fits[["df_tms"]]) %>%
+                bind_rows() %>%
+                mutate(which_model = "dRFU") %>%
+                rename(mean_tma1 = "dRFU_tma") %>%
+                select(well, which_model, condition, mean_tma1)
+
+ #df_resids <- out[[3]]
+
+out_list <- list("model_tmas" = out[[1]][[2]],
+                 "model_results" = out[[2]],
+                 "resid" = out[[2]] %>% select(variable, which_model, resids) %>% unnest( cols = c(resids) ),
+                 "dRFU_tmas" = dRFU_tmas,
+                 "df_BIC" = out[[1]][[2]] )
+
+}
 ```
+
+```{r}
+test_extract<- lapply(all_processed[1], merge_elements)
+
+test_extract$Exp0827$model_tmas
+
+test_extract$Exp0827$resid$which_model %>% table()
+
+results_extracted <- lapply(all_processed, merge_elements)
+
+results_extracted$Exp0827$model_tmas
+```
+
+
 
 Read in analysis results
 ```{r}
@@ -175,76 +225,124 @@ ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_pooled.pdf", g_summary, 
 ```
 
 
+```{r}
+all_TAMRA %>% 
+```
+
+```{r}
+all_resids %>% head()
+
+results_extracted$Exp0827$resid
+```
+
+
 Criteria 2: by high residuals of the fits
 ```{r}
-# well is unique here! use that
-merge_elements <- function(in_list) {
-  df_list <-c("tm_models_all", "df_BIC")
-  model_list <- c("s1_list", "s1_d_list", "s2_list", "s2_d_list")
+###### Clean up analysis results  ----------
+results_extracted <- lapply(all_processed, merge_elements)
+
+##### Isolate just the residuals and bind into single data frame
+all_resids <- lapply(results_extracted, `[[`,  j = "resid" ) %>%
+               bind_rows() %>%
+              separate(variable, into = c("well", "channel", "plate_number"), remove = FALSE)
+
+sum_resids <- all_resids %>% 
+              unite(plate_number_model, c(plate_number, which_model), remove = FALSE) %>%
+              #filter(which_model == "s2_list") %>%
+              group_by(which_model) %>%
+              mutate(sum_abs_resid = sum(abs(resid))) %>%
+              select(plate_number_model, which_model, variable, plate_number, sum_abs_resid) %>%
+              ungroup() %>%
+              distinct() %>%
+              rename(value = sum_abs_resid) %>%
+
+              group_by(plate_number) %>%
+               mutate( outlier = if_else(value > get_upper_whisker(IQR_coef = 1.5, quant_col = value), # identify outliers
+                                   true = "Rejected",
+                                   false = "Retained") )
+
+sum_resid_rejects <- sum_resids$variable %>% unique()
+
+######### Each experiment individually  ------------------
+g <- sum_resids %>%
+  # filter(plate_number == "Exp0827",
+  #        which_model =="s1_list") %>%
+          ggplot(data = . , 
+                 aes(x = which_model, 
+                     y = value, #x = plate_number, 
+                     fill = which_model, 
+                     group = which_model)) +
+          
+          geom_flat_violin(position = position_nudge(x = .2, y = 0), 
+                           alpha = .8) +
+          
+          geom_point(aes(shape = outlier,
+                         color = which_model), 
+                     position = position_jitter(width = .15), 
+                     size = .5, 
+                     alpha = 0.8) +
   
-  out <- list()
-  for (df_element in df_list) {
-
-    int <- lapply(model_list, function(x) in_list$fits[[x]][[df_element]])  %>%
-              bind_rows() # bind together extracted df_element from all four models
-
-    out <- list(out, int) # add that df_element to a list
-  }
+          geom_boxplot(width = .15,  outlier.shape = 19, alpha = 0.5, coef = 1.5) +
   
- dRFU_tmas  <- lapply(model_list, function(x) in_list$fits[["df_tms"]]) %>%
-    bind_rows() %>%
+          scale_shape_manual(values = c(4,16) )+
+          #scale_y_continuous( trans = "log2" ) +
 
-    mutate(which_model = "dRFU") %>%
-   rename(mean_tma1 = "dRFU_tma") %>%
-      select(well, which_model, condition, mean_tma1) 
+          theme_bw() +
+          raincloud_theme +
+          labs(title = "Some day-to-day variation in starting RFUs\nmotivates experiment-specific threshholding", 
+               y = "RFU (TAMRA 535/580 nm)",
+               x = "Plate Number") +
+          
+          coord_flip() +
   
-out_list <- list("model_tmas" = out[[1]][[2]],
-                 "dRFU_tmas" = dRFU_tmas,
-                 "df_BIC" = out[[2]])
+          guides(fill="none", 
+                 color = "none",
+                 shape = guide_legend( title = "",
+                                       labels = paste("long", c(5, 10)),
+                                       labels = c(`FALSE` = "Retained", `TRUE` = "Rejected"),
+                                       override.aes = list(size = 5),
+                                       legend.justification = c("right", "top")
+                                       #legend.position = c(.95, .95)
+                                       )
+                 ) +
+            facet_wrap(~plate_number)
 
-}
+# Save one version with the experiment numbers
+g_expnum <- g + scale_x_discrete( labels = all_TAMRA$plate_number %>% unique() %>% extract_numeric() %>% substr(0, 3) )
+g_expnum
+# Save one version with consecutive numbers
+g_order_num <- g + scale_x_discrete( labels = 16:1 )
 
-merged_dfs <- lapply(all_processed[1], merge_elements)
+# ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_all_experiment_exp_numbered.pdf", g_expnum, width = 7, height = 10)
+# ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_all_experiment_consec_numbered.pdf", g_order_num, width = 7, height = 10)
 
-merged_dfs
-
-```
-```{r}
-
-merge_elements <- function( in_list ) {
+######### All experiments pooled ------------------ 
+g_summary <- RFU_25 %>%
+  ggplot(data = . , 
+         aes(x = 0, 
+             y = value)) +
   
-   df_list <- c("tm_models_all", "df_BIC", "model")
-    model_list <- c("s1_list", "s1_d_list", "s2_list", "s2_d_list")
+  geom_flat_violin(position = position_nudge(x = .2, y = 0), 
+                   alpha = .8) +
   
-  out <- list()
+  geom_point(position = position_jitter(width = .15), 
+             size = .5, 
+             alpha = 0.5) +
   
-  for (df_element in df_list) {
+    geom_boxplot(width = .1,  outlier.shape = 19, alpha = 0.5) +
+  
+  scale_y_continuous(trans = "log2") +
+  
+  theme_bw() +
+  raincloud_theme +
+  theme(axis.title.y = element_blank()) +
+  labs(title = "All experiments pooled", 
+       y = "Total absolute residual of Model 3") +
+  
+  coord_flip()
 
-    int <- lapply(model_list, function(x) in_list$fits[[x]][[df_element]])  %>%
-              bind_rows() # bind together extracted df_element from all four models
+# ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_pooled.pdf", g_summary, width = 7, height = 3)
 
-    out <- list(out, int) # add that df_element to a list
-    
-  }
-
- dRFU_tmas  <- lapply(model_list, function(x) in_list$fits[["df_tms"]]) %>%
-                bind_rows() %>%
-                mutate(which_model = "dRFU") %>%
-                rename(mean_tma1 = "dRFU_tma") %>%
-                select(well, which_model, condition, mean_tma1)
-
- #df_resids <- out[[3]]
-
-out_list <- list("model_tmas" = out[[1]][[2]],
-                 "model_results" = out[[2]],
-                 "resid" = out[[2]] %>% select(variable, resids) %>% unnest( cols = c(resids) ),
-                 "dRFU_tmas" = dRFU_tmas,
-                 "df_BIC" = out[[1]][[2]] )
-
-}
-
-
-merge_test <- lapply(all_processed[1], merge_elements )
 ```
 
 ```{r}
