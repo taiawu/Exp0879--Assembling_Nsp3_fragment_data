@@ -1,15 +1,15 @@
 ---
-title: "Assembling Fragment data"
+title: "Step 1, Notebook 1: Assembling and Fitting Fragment DSF Data"
 output: html_notebook
 ---
 
 This notebook performs dRFU and model fitting on multiple Nsp3 experiments pooled from separate directories.
 
-Later notebooks will:
-Clean analysis results
-Make plots
-Make tables
-Calculate relevant statistics
+To be performed by later notebooks:
+- Clean analysis results
+- Make plots
+- Make tables
+- Calculate relevant statistics
 
 ```{r}
 library(quantmod) # contains the findValleys function, which maybe we should just extract and put verbatim in a source file instead of loading this whole thing...?
@@ -157,6 +157,9 @@ Analyze
 all_processed <- map2(dfs_protein_TAMRA, 
                       dfs_protein_TAMRA %>% names() %>% paste0("analyzed/", . , "_tma_analysis_results_"),
                       process_screen_879)
+
+  write_rds(x = all_processed, "analyzed/Exp0879--20200912_all_analyzed_results.rds") # write this list to an rds in this directory ## THIS IS TOO LARGE TO UPLOAD TO GITHUB!!!!
+  
 ```
 
 

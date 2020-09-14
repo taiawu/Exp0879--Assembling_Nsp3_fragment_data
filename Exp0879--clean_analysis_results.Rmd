@@ -1,75 +1,239 @@
 ---
-title: "R Notebook"
+title: "Step 2, Notebook 2: Assembling Fragment data"
 output: html_notebook
 ---
+This notebook takes raw data and fits results, and cleans results for further analysis. 
+It contains the second step of this pipeline. 
+Specifically:
+- establish cutoffs for "bad" fits and "bad" curves, and remove them 
+- ensure tma1 and tma2 are all correcty grouped
+
+Perform in previous notebook Exo0879--clean_and_fit.Rmd:
+- Pooled all data
+- Performed fitting analysis
+
+To be performed by later notebooks:
+- Make plots
+- Make tables
+- Calculate relevant statistics
 
 ```{r}
+library(tidyverse)
 
+convert_numerics <- function( vec ) {
+    
+    if(all(varhandle::check.numeric(vec))){
+        # convert the vector to numeric
+        vec <- as.numeric(vec)
+    }
+    vec
+}
 ```
 
+Read in analysis results
+```{r}
+all_processed <- readRDS("analyzed/Exp0879--20200912_all_analyzed_results.rds") # all analysis results
+dfs_protein_EBPS <- readRDS("analyzed/Exp0879--20200912_all_dfs_list_no_empties.rds") # all raw data
+dfs_protein_TAMRA <- readRDS("analyzed/Exp0879--20200912_all_dfs_as_input_to_analysis.rds") # no EBPs and TAMRA only, fed directly to fitting function
+```
 
 Highlighting poor fits/odd curves
+
+Criteria 1: By high initial fluorecence
+
+Create raincloud plot theme
 ```{r}
-#install.packages("PupillometryR")
-# library(PupillometryR)
+# https://micahallen.org/2018/03/15/introducing-raincloud-plots/
+library(PupillometryR) # has geom_flat_violin
 
-# library(readr)
-# library(tidyr)
-# library(ggplot2)
-library(Hmisc)
-# library(plyr)
-# library(RColorBrewer)
-library(reshape2)
+raincloud_theme = theme(  
+                          # set publication-quality text sizes
+                          text = element_text(size = 14),
+                          
+                          plot.title = element_text(lineheight=.8, face="bold", size = 16),
+                          axis.title.x = element_text(size = 16),
+                          axis.title.y = element_text(size = 16),
+                          
+                          axis.text = element_text(size = 14),
+                          #axis.text.x = element_text(angle = 90, vjust = 0.5),
+                          
+                          # lenengd aesthetics (new feautres for legen aesthetics are available!)
+                          legend.title=element_text(size=16),
+                          legend.text=element_text(size=16),
+                          legend.position = "none",
 
-mini_test <- dfs_protein_TAMRA$Exp0827
+                          # remove gridlines; they don't add much to violin plots
+                          panel.grid.minor = element_blank(),
+                          panel.grid.major = element_blank(),
+                          
+                          # make whitespace transparent
+                          panel.background = element_rect(fill = "transparent",colour = NA),
+                          plot.background = element_rect(fill = "transparent",colour = NA)
+                          )
+```
 
-
+Make raincloud plots to compare starting RFU
+```{r}
+# Bind all data together, retaining only the columns which will exist in all experiments
 all_TAMRA <- dfs_protein_TAMRA %>%
               map(. , ~select(.x, c(Temperature, plate_number, value, value_norm)) ) %>%
-            map(. , ~filter(.x, dye != "T004") ) %>%
               bind_rows()
 
-all_25 <- all_TAMRA %>%
-           filter(Temperature == 25) 
-# borrowed from Paula Andrea Martinez's post mentioned above
-g <- 
-  ggplot(data = all_25, 
+
+g <- all_TAMRA %>%
+      filter(Temperature == 25) %>%
+  ggplot(data = . , 
          aes(x = plate_number, 
              y = value, 
              fill = plate_number)) +
-  geom_flat_violin(position = position_nudge(x = .2, y = 0), alpha = .8) +
-  geom_point(aes(y = value, color = plate_number), 
-             position = position_jitter(width = .15), size = .5, alpha = 0.8) +
-  ylim(c(0, max(all_25$value))) +
-  scale_y_continuous(trans = "log2")
-  # geom_point(data = mini_test, aes(x = plate_number, y = mean), 
-  #            position = position_nudge(x = 0.3), size = 2.5) +
-  # geom_errorbar(data = mini_test, aes(ymin = lower, ymax = upper, y = mean), 
-  #               position = position_nudge(x = 0.3), width = 0) +
-  # expand_limits(x = 5.25) +
-  # guides(fill = FALSE) +
-  # guides(color = FALSE) +
-  # coord_flip() + 
-  # scale_color_brewer(palette = "Spectral") +
-  # scale_fill_brewer(palette = "Spectral") +
-  # theme_bw() 
+  
+  geom_flat_violin(position = position_nudge(x = .2, y = 0), 
+                   alpha = .8) +
+  
+  geom_point(aes(color = plate_number), 
+             position = position_jitter(width = .15), 
+             size = .5, 
+             alpha = 0.5) +
+  
+    geom_boxplot(width = .1,  outlier.shape = 19, alpha = 0.5) +
+  
+  scale_y_continuous(trans = "log2") +
+  
+  theme_bw() +
+  raincloud_theme +
+  theme(axis.title.y = element_blank()) +
+  labs(title = "Some day-to-day variation in starting RFUs\nmotivates experiment-specific threshholding", 
+       y = "RFU (TAMRA 535/580 nm)") +
+  
+  coord_flip()
 
-g
-# +
-#   raincloud_theme
-                         
-                         my_datal <- melt(my_data, id.vars = c("Participant"), measure.vars = c("AngerUH", "DisgustUH", "FearUH", "HappyUH"), variable.name = "EmotionCondition", value.name = "Sensitivity")
+ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_all_experiment.pdf", g, width = 7, height = 10)
+```
 
-# call out by the starting RFU in the raw data
-mini_test %>%
+Make raincloud plot to compare the results for all experiments, if pooled
+```{r}
+# 
+g_summary <- all_TAMRA %>%
+      filter(Temperature == 25) %>%
+  ggplot(data = . , 
+         aes(x = 0, 
+             y = value)) +
+  
+  geom_flat_violin(position = position_nudge(x = .2, y = 0), 
+                   alpha = .8) +
+  
+  geom_point(position = position_jitter(width = .15), 
+             size = .5, 
+             alpha = 0.5) +
+  
+    geom_boxplot(width = .1,  outlier.shape = 19, alpha = 0.5) +
+  
+  scale_y_continuous(trans = "log2") +
+  
+  theme_bw() +
+  raincloud_theme +
+  theme(axis.title.y = element_blank()) +
+  labs(title = "All experiments pooled", 
+       y = "RFU (TAMRA 535/580 nm)") +
+  
+  coord_flip()
+
+ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_pooled.pdf", g_summary, width = 7, height = 3)
+```
+
+```{r}
+rename(iris, petal_length, starts_with("Petal"))
+```
+
+Does ADP ribose consistently decrease the starting RFU?
+```{r}
+has_compound_conc_col <-  map( dfs_protein_TAMRA , ~"compound_conc" %in% names(.x)  ) %>% as_vector() # just the channel of interest
+
+ADPr <-  map( dfs_protein_TAMRA ,
+                      ~filter(.x,  # for each tibble
+                              across(any_of("compound") | any_of("ZINC"), # if there's a compound or ZINC column
+                               ~.x == c("ADPribose")) )) %>% # keep ADPr
+          map(. , ~mutate_all(.x, as.character)) %>%
+          .[has_compound_conc_col] %>%
+          map(. , ~select(.x, c(Temperature, plate_number, value, compound_conc)) ) %>%
+          bind_rows() %>%
+          unite("plate_compound_conc", # name of new column
+                        plate_number, compound_conc, # unite these
+                        remove = FALSE) %>%
+          mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
+          mutate_at( . ,"compound_conc", as.numeric)
+
+ADPr_25_stats <- ADPr %>%
+                filter(Temperature == 25) %>%
+                group_by(plate_number) %>%
+                nest() %>%
+                  mutate(
+                  test = map(data, ~ cor.test(.x$compound_conc, .x$value)), # S3 list-col
+                  tidied = map(test, broom::tidy)
+                ) %>%
+                unnest(tidied)
+
+
+experiment_labs <- paste0("Experiment ", 1:10)
+names(experiment_labs) <- ADPr$plate_number %>% unique()
+
+ADPr_vs_starting_val <- ADPr %>%
   filter(Temperature == 25) %>%
-  ggplot() +
-  PupillometryR::geom_flat_violin() 
- # geom_density(aes(value))
+                          ggplot(aes(x = compound_conc, y = value)) +
+                          geom_jitter( aes(group = plate_compound_conc), alpha = 0.5) +
+                           scale_x_continuous(trans = "log2", breaks = c(0, 10, 100,1000))  +
+                           facet_wrap(~plate_number,
+                                      labeller = labeller(plate_number = experiment_labs),
+                                      ncol = 5) +
+                            theme_bw() +
+  geom_boxplot(aes(group = plate_compound_conc), width = 1,  outlier.shape = NA, alpha = 0.5) +
+  geom_text(data = ADPr_25_stats, aes(x = 7, y = 9000, label = paste0("p = ", p.value %>% round(2)))) +
+  raincloud_theme +
+  theme(axis.text.x = element_text(angle = 90)) +
+  ylim(c(0, 10050))+
+  labs(title = "Initial RFU not correlated with [ADP ribose]\nAcross 10 independent experiments\n(Pearson's Correllation Coefficient)",
+       y = "RFU (TAMRA, 535/580 nm)",
+       x = "[ADP ribose] (µM)") 
 
-# call out by the residuals in the fits
+
+ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_ADPr_not_correlated.pdf", ADPr_vs_starting_val, width = 7, height = 4)
+```
+
+```{r}
+
+
+
+  mutate(cor_test = tidy_cor( . , compound_conc, value)) 
+
+
+adprt<- ADPr %>%
+  filter(Temperature == 25) %>%
+  filter(plate_number == "Exp0827")
+
+
+
+tidy_cor <- function(data_in, x_val, y_val, return_val = "estimate") {
+  x_cor <- data_in %>% select({{x_val}}) %>% as_vector()
+  y_cor <- data_in %>% select({{y_val}}) %>% as_vector()
+  
+  cor.test(x_cor, y_cor ) %>%
+    broom::tidy() %>%
+    select({{return_val}}) %>%
+    as_vector()
+}
+
+tidy_cor(adprt, compound_conc, value)
+
+ADPr_25_stats
 
 ```
+
+
+Criteria 2: by high residuals to he fits
+```{r}
+
+```
+
 
 
 Post analysis cleaning
@@ -176,3 +340,12 @@ Main figure: dose-response for
 ```{r}
 
 ```
+
+```{r}
+# isolate just the experiments which tested both ADP ribose and DMSO
+# https://stackoverflow.com/questions/45146688/execute-dplyr-operation-only-if-column-exists
+
+                 # map( . ,   ~rename( .x, compound_new = starts_with("ZINC"))) 
+                 # map( . , ~select( .x, -one_of("compound")))
+```
+
