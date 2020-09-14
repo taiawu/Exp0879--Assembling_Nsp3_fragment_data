@@ -177,9 +177,83 @@ ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_pooled.pdf", g_summary, 
 
 Criteria 2: by high residuals of the fits
 ```{r}
+# well is unique here! use that
+merge_elements <- function(in_list) {
+  df_list <-c("tm_models_all", "df_BIC")
+  model_list <- c("s1_list", "s1_d_list", "s2_list", "s2_d_list")
+  
+  out <- list()
+  for (df_element in df_list) {
 
+    int <- lapply(model_list, function(x) in_list$fits[[x]][[df_element]])  %>%
+              bind_rows() # bind together extracted df_element from all four models
+
+    out <- list(out, int) # add that df_element to a list
+  }
+  
+ dRFU_tmas  <- lapply(model_list, function(x) in_list$fits[["df_tms"]]) %>%
+    bind_rows() %>%
+
+    mutate(which_model = "dRFU") %>%
+   rename(mean_tma1 = "dRFU_tma") %>%
+      select(well, which_model, condition, mean_tma1) 
+  
+out_list <- list("model_tmas" = out[[1]][[2]],
+                 "dRFU_tmas" = dRFU_tmas,
+                 "df_BIC" = out[[2]])
+
+}
+
+merged_dfs <- lapply(all_processed[1], merge_elements)
+
+merged_dfs
 
 ```
+```{r}
+
+merge_elements <- function( in_list ) {
+  
+   df_list <- c("tm_models_all", "df_BIC", "model")
+    model_list <- c("s1_list", "s1_d_list", "s2_list", "s2_d_list")
+  
+  out <- list()
+  
+  for (df_element in df_list) {
+
+    int <- lapply(model_list, function(x) in_list$fits[[x]][[df_element]])  %>%
+              bind_rows() # bind together extracted df_element from all four models
+
+    out <- list(out, int) # add that df_element to a list
+    
+  }
+
+ dRFU_tmas  <- lapply(model_list, function(x) in_list$fits[["df_tms"]]) %>%
+                bind_rows() %>%
+                mutate(which_model = "dRFU") %>%
+                rename(mean_tma1 = "dRFU_tma") %>%
+                select(well, which_model, condition, mean_tma1)
+
+ #df_resids <- out[[3]]
+
+out_list <- list("model_tmas" = out[[1]][[2]],
+                 "model_results" = out[[2]],
+                 "resid" = out[[2]] %>% select(variable, resids) %>% unnest( cols = c(resids) ),
+                 "dRFU_tmas" = dRFU_tmas,
+                 "df_BIC" = out[[1]][[2]] )
+
+}
+
+
+merge_test <- lapply(all_processed[1], merge_elements )
+```
+
+```{r}
+merge_test<- lapply(all_processed[1], merge_elements, )
+
+all_processed$Exp0827$fits$s1_d_list$model
+```
+
+
 
 
 Ultimately, move this to hit calling criteria exploration notebook
