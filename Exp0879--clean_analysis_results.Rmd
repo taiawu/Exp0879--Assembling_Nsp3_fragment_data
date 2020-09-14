@@ -332,17 +332,19 @@ g_summary <- RFU_25 %>%
 
 ```
 Isolate data for all paper 1 componds 
+Extract compound/layout information from the original dataframges
 ```{r}
 paper1_cmpds_table <- readxl::read_excel("Exp0879--20200912_fragments_for_paper1.xlsx") %>%
-  rename(ZINC = ID)
-paper1_cmpds_table
+                      rename(ZINC = ID) %>%
+                       rename(compound = `Tube-label`)
+
 paper1_cmpds <- paper1_cmpds_table$`Tube-label`
 
 results_extracted$Exp0827$model_tmas[[2]]
 all_model_tmas <- lapply(results_extracted, `[[`,  j = "model_tmas" ) %>%
                   bind_rows()
 
-has_compound_conc_col <-  map( dfs_protein_TAMRA , ~"compound_conc" %in% names(.x)  ) %>% as_vector() 
+has_compound_conc_col <-  map( dfs_protein_TAMRA , ~"compound_conc" %in% names(.x)  ) %>% as_vector()
 
 has_ZINC_col_only <-  map2( map( dfs_protein_TAMRA , ~"ZINC" %in% names(.x)  ) %>% as_vector(),
                             map(dfs_protein_TAMRA , ~!"compound" %in% names(.x)  ) %>% as_vector(),
@@ -351,47 +353,62 @@ has_ZINC_col_only <-  map2( map( dfs_protein_TAMRA , ~"ZINC" %in% names(.x)  ) %
 
 compound_col_added <- dfs_protein_TAMRA %>% 
                       .[has_ZINC_col_only] %>%
-                       map(. , ~left_join(.x, paper1_cmpds_table %>% select(ZINC, `Tube-label`))) %>%
-                        map( . ,   ~rename( .x, compound = `Tube-label)) 
-
-with_compound_col$Exp0827
+                       map(. , ~left_join(.x, paper1_cmpds_table %>% select(ZINC, compound))) #%>%
 
 with_compound_col <- c(dfs_protein_TAMRA[!has_ZINC_col_only], compound_col_added)
 
 has_compound_conc_col <- map( with_compound_col , ~"compound_conc" %in% names(.x)  ) %>% as_vector()
 
-layouts_all <- with_compound_col %>%
+
+has_compound_col<- map( with_compound_col , ~"compound" %in% names(.x)  ) %>% as_vector()
+has_compound_col
+
+all_layouts <-with_compound_col %>%
                       .[has_compound_conc_col] %>%
                       map(. , ~select(.x, c(condition, compound, compound_conc)) ) %>%
-                              bind_rows() %>%
-                              mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
-                              mutate_at( . ,"compound_conc", as.numeric)
+                      map(. , ~mutate_all(.x, as.character)) %>%
+                  
+                               bind_rows()  %>%
+                    mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
+                    mutate_at( . ,"compound_conc", as.numeric)
 
-
-#                       
-# ## if there is only a ZINC column
-# 
-# ADPr <-  dfs_protein_TAMRA %>%
-#             .[has_compound_conc_col] %>% 
-#   map( dfs_protein_TAMRA ,
-#                       ~filter(.x,  # for each tibble
-#                               #across(any_of("compound") | any_of("ZINC"), # if there's a compound or ZINC column
-#                                ~.x %in% c("ADPribose")) )) %>% # keep ADPr
-#           map(. , ~mutate_all(.x, as.character)) %>%
-# 
-#           map(. , ~select(.x, c(Temperature, plate_number, value, compound_conc)) ) %>%
-#           bind_rows() %>%
-#           unite("plate_compound_conc", # name of new column
-#                         plate_number, compound_conc, # unite these
-#                         remove = FALSE) %>%
-#           mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
-#           mutate_at( . ,"compound_conc", as.numeric)
-
-
+all_layouts
 ```
-
+Combine the layout information with the tma information
 ```{r}
-paper1_cmpds_table
+all_tmas <- lapply(results_extracted, `[[`,  j = "model_tmas" ) %>%
+               bind_rows() %>%
+               select(condition, mean_tma1, mean_tma2, which_model) %>%
+                set_names(c("condition", "tma1", "tma2", "which_model")) %>%
+                inner_join(all_layouts, by = "condition")
+
+all_tmas $compound %>% unique() %>% length()
+
+p_glance <- all_tmas %>%
+  filter(which_model == "s2_list") %>%
+                ggplot(aes(x = compound_conc, y = tma1)) +
+                geom_point() +
+  facet_wrap(~compound)
+
+p_glance
+
+ggsave("p_glance.pdf", p_glance, width = 20, height = 20)
+
+sum_resids <- all_resids %>% 
+              unite(plate_number_model, c(plate_number, which_model), remove = FALSE) %>%
+              #filter(which_model == "s2_list") %>%
+              group_by(which_model) %>%
+              mutate(sum_abs_resid = sum(abs(resid))) %>%
+              select(plate_number_model, which_model, variable, plate_number, sum_abs_resid) %>%
+              ungroup() %>%
+              distinct() %>%
+              rename(value = sum_abs_resid) %>%
+
+              group_by(plate_number) %>%
+               mutate( outlier = if_else(value > get_upper_whisker(IQR_coef = 1.5, quant_col = value), # identify outliers
+                                   true = "Rejected",
+                                   false = "Retained") )
+
 ```
 
 
