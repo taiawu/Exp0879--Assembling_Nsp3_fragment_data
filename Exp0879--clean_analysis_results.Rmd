@@ -71,6 +71,8 @@ out_list <- list("model_tmas" = out[[1]][[1]][[2]],
                  "df_BIC" = out[[1]][[2]] )
 
 }
+
+
 ```
 
 ```{r}
@@ -334,84 +336,281 @@ g_summary <- RFU_25 %>%
 Isolate data for all paper 1 componds 
 Extract compound/layout information from the original dataframges
 ```{r}
-paper1_cmpds_table <- readxl::read_excel("Exp0879--20200912_fragments_for_paper1.xlsx") %>%
-                      rename(ZINC = ID) %>%
-                       rename(compound = `Tube-label`)
+paper1_cmpds_table <- readxl::read_excel("Exp0879--20200912_fragments_for_paper1.xlsx")
 
-paper1_cmpds <- paper1_cmpds_table$`Tube-label`
+paper1_cmpds_table%>% head()
 
-results_extracted$Exp0827$model_tmas[[2]]
+# paper1_cmpds <- paper1_cmpds_table$compound
+###### Create a tibble containing all information for the paper 1 compounds + ADPribose + DMSO
+## Extract and bind the model results from all experiments
 all_model_tmas <- lapply(results_extracted, `[[`,  j = "model_tmas" ) %>%
                   bind_rows()
+##### Handle the cases where there is a ZINC column but no compound column
+#has_compound_conc_col <-  map( dfs_protein_TAMRA , ~"compound_conc" %in% names(.x)  ) %>% as_vector()
 
-has_compound_conc_col <-  map( dfs_protein_TAMRA , ~"compound_conc" %in% names(.x)  ) %>% as_vector()
+# Identify tibbles with ZINC but no compound columns
+has_ZINC_col <- map( dfs_protein_TAMRA , ~"ZINC" %in% names(.x)  ) %>% as_vector() # has ZINC
+missing_compound_col <- map(dfs_protein_TAMRA , ~!"compound" %in% names(.x)  ) %>% as_vector() # doesn't have compound
 
-has_ZINC_col_only <-  map2( map( dfs_protein_TAMRA , ~"ZINC" %in% names(.x)  ) %>% as_vector(),
-                            map(dfs_protein_TAMRA , ~!"compound" %in% names(.x)  ) %>% as_vector(),
-                            all) %>% 
-                      as_vector()
+has_ZINC_col_only <-  map2( has_ZINC_col, missing_compound_col, all) %>% as_vector() # has ZINC and no compound
 
-compound_col_added <- dfs_protein_TAMRA %>% 
+# Bind tube label information to the tibbles with a compound column
+with_compound_col <- dfs_protein_TAMRA[!has_ZINC_col_only] %>%  
+                    map(. , ~left_join(.x, paper1_cmpds_table))
+
+# Isolate the ZINC-only tibbles and add the compound names
+with_compound_col <- dfs_protein_TAMRA %>% 
                       .[has_ZINC_col_only] %>%
-                       map(. , ~left_join(.x, paper1_cmpds_table %>% select(ZINC, compound))) #%>%
+                       map(. , ~left_join(.x, paper1_cmpds_table)) %>%
+                      c(. , with_compound_col ) # re-combine with the tibbles which already had compound cols
 
-with_compound_col <- c(dfs_protein_TAMRA[!has_ZINC_col_only], compound_col_added)
 
+
+# only keep tibbles which note compound concentration
 has_compound_conc_col <- map( with_compound_col , ~"compound_conc" %in% names(.x)  ) %>% as_vector()
 
-
-has_compound_col<- map( with_compound_col , ~"compound" %in% names(.x)  ) %>% as_vector()
-has_compound_col
-
-all_layouts <-with_compound_col %>%
+###### All raw data for all paper-1 compounds --------------
+paper1_raw <- with_compound_col %>%
                       .[has_compound_conc_col] %>%
-                      map(. , ~select(.x, c(condition, compound, compound_conc)) ) %>%
+                      map(. , ~select(.x, c(condition, plate_number, compound, compound_conc, xtal_hit, batch, Temperature, value, value_norm )) ) %>%
                       map(. , ~mutate_all(.x, as.character)) %>%
-                  
-                               bind_rows()  %>%
-                    mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
-                    mutate_at( . ,"compound_conc", as.numeric)
+                      bind_rows( )  %>%
+                      ungroup( )%>%
+                      mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
+                      mutate_at( . ,"compound_conc", as.numeric) %>%
+                      filter(is.na(compound) == FALSE,
+                             !compound %in% c("Empty", "None", "ATP", "ADP", "6511", "8637", "9020")) %>%
+                      mutate(compound = recode(compound,  adp_rib_control = "ADPribose", ADPriibose = "ADPribose")) %>%
+                      mutate(compound =  str_remove( compound , "^0+")) %>%  # remove leading zeroes to merge these two forms of indexing
+                      mutate(variable = condition)
 
-all_layouts
+paper1_raw$compound %>% unique() %>% length()
+# [1] 60 # including DMSO and ADPribose
+
+###### All layouts for all paper-1 compounds --------------
+paper1_layouts <- paper1_raw %>% 
+                  select(condition, variable, plate_number, compound, compound_conc, xtal_hit, batch) %>%
+                  distinct()
+
+paper1_layouts$compound %>% unique() %>% length()
+# [1] 60 # including DMSO and ADPribose
+
+paper1_layouts %>% head()
+
+###### All Tmas for all paper 1 compounds --------------
+paper1_tmas <- lapply(results_extracted, `[[`,  j = "model_tmas" ) %>%
+                bind_rows() %>%
+                ungroup() %>%
+                select(condition, mean_tma1, mean_tma2, which_model) %>%
+                rename(tma1 = "mean_tma1", tma2 = "mean_tma2") %>%
+                inner_join(paper1_layouts, by = "condition")  
+
+paper1_tmas$compound %>% unique() %>% length()
+# [1] 60 # including DMSO and ADPribose
+
 ```
-Combine the layout information with the tma information
+
+Isolate and plot just the DRCs from the last three experiments
 ```{r}
-all_tmas <- lapply(results_extracted, `[[`,  j = "model_tmas" ) %>%
-               bind_rows() %>%
-               select(condition, mean_tma1, mean_tma2, which_model) %>%
-                set_names(c("condition", "tma1", "tma2", "which_model")) %>%
-                inner_join(all_layouts, by = "condition")
+##### Just the DRC experiments
+paper1_tma_DRCs <- paper1_tmas %>%
+                    filter(plate_number %in% c("Exp0868", "Exp0877_plate3", "Exp0877_plate4")) %>%
+                    unite(condition, c(compound, compound_conc), remove = FALSE) %>%
+                    group_by(condition) %>%
+                    mutate(mean_tma1 = mean(tma1),
+                           sd_tma1   = sd(tma1),
+                           mean_tma2 = mean(tma2),
+                           sd_tma2   = sd(tma2)) 
 
-all_tmas $compound %>% unique() %>% length()
 
-p_glance <- all_tmas %>%
+p_tma_raw <- paper1_tma_DRCs %>%
+  ungroup() %>%
   filter(which_model == "s2_list") %>%
-                ggplot(aes(x = compound_conc, y = tma1)) +
-                geom_point() +
-  facet_wrap(~compound)
+  # select(compound, compound_conc, tma1, tma2, xtal_hit, compound_f) %>%
+  pivot_longer(cols = c(tma1, tma2)) %>%
+ # filter(name == "tma1") %>%
+    filter(value < 55) %>%
+    filter(value > 48) %>%
+  
+ggplot( aes(x = compound_conc, 
+            y = value,
+            color = xtal_hit
+            )) +
+  geom_point(alpha = 0.5)+
+  #ylim(c(49, 55)) +
+  #geom_linerange(aes(ymin = `Tma 1`  -tma1, ymax = tma1  + tma1_sd)) +
+  facet_wrap(~compound_f, scales = "fixed") +
+  labs( x = "[Compound] (µM)", y = "Tma of major transtion (Model 3)", title = "Nsp3 Mac1 Fragments, Batch 1") 
+  
+  
 
-p_glance
+ggsave("draft_figures/Exp0879--20200914_tma_DRCs_model3_fixed.pdf", p_tma, width = 15, height = 15)
 
-ggsave("p_glance.pdf", p_glance, width = 20, height = 20)
+```
 
-sum_resids <- all_resids %>% 
-              unite(plate_number_model, c(plate_number, which_model), remove = FALSE) %>%
-              #filter(which_model == "s2_list") %>%
-              group_by(which_model) %>%
-              mutate(sum_abs_resid = sum(abs(resid))) %>%
-              select(plate_number_model, which_model, variable, plate_number, sum_abs_resid) %>%
-              ungroup() %>%
-              distinct() %>%
-              rename(value = sum_abs_resid) %>%
+```{r}
+p_tma_s1 <- paper1_tma_DRCs %>%
+  ungroup() %>%
+  filter(which_model == "s1_d_list") %>%
+  # select(compound, compound_conc, tma1, tma2, xtal_hit, compound_f) %>%
+  pivot_longer(cols = c(tma1, tma2)) %>%
+ # filter(name == "tma1") %>%
+    filter(value < 55) %>%
+    filter(value > 48) %>%
+  
+ggplot( aes(x = compound_conc, 
+            y = value,
+            color = xtal_hit
+            )) +
+  geom_point(alpha = 0.5)+
+  #ylim(c(49, 55)) +
+  #geom_linerange(aes(ymin = `Tma 1`  -tma1, ymax = tma1  + tma1_sd)) +
+  facet_wrap(~compound_f, scales = "fixed") +
+  labs( x = "[Compound] (µM)", y = "Tma of major transtion (Model 2)", title = "Nsp3 Mac1 Fragments, Batch 1") 
+  ggsave("draft_figures/Exp0879--20200914_tma_DRC_model1_fixed.pdf", p_tma, width = 15, height = 15)
 
-              group_by(plate_number) %>%
-               mutate( outlier = if_else(value > get_upper_whisker(IQR_coef = 1.5, quant_col = value), # identify outliers
-                                   true = "Rejected",
-                                   false = "Retained") )
+```
+
+Group the Tmas 
+```{r}
+# take whichever one is closer to the s1 tma and set it as tma1
+median_tma1 <-  quantile(paper1_tmas$tma1, 0.5) # 51.9
+median_tma2 <- quantile(paper1_tmas$tma2, 0.5, na.rm = TRUE) # 61.2 
+
+paper1_tmas %>% head()
+
+
+### this should be added to dsfworld!!!
+####
+sort_tmas <- function(test_tma, anchor_tma) {
+  ensure_unique <- runif(1, min = 0.001, max = 0.01)
+### needs NA and error handling prior to use in dsfworld
+ raw <-  if_else(abs({{test_tma}} - {{anchor_tma}}) == min(abs({{test_tma}} - {{anchor_tma}})),
+            true = "new_tma1",
+            false = "new_tma2")
+
+}
+
+sorted_tmas <- paper1_tmas %>%
+  filter(compound != 27) %>%
+  pivot_wider(names_from = which_model, values_from = c(tma1, tma2))%>%
+
+  pivot_longer(cols = c("tma1_s2_list", "tma1_s2_d_list", "tma2_s2_list", "tma2_s2_d_list"), names_to = "model_and_tma") %>%
+  filter(is.na(value) == FALSE) %>%
+  mutate(which_tma = str_sub(model_and_tma, start = 0, end = 4),
+         two_sig_model = str_sub(model_and_tma, start = 6, end = -1)) %>% 
+  ungroup() %>%
+  mutate(value = value + runif( n = nrow(.),  min = 0.001, max = 0.01)) %>% # a little hack to ensure uniqueness
+  arrange(variable, two_sig_model) %>%
+  group_by(variable, two_sig_model) %>%
+
+  mutate(closest_to_tma1 = sort_tmas(value, tma1_s1_d_list)) %>%
+  select(-c(model_and_tma, which_tma))  %>%
+  pivot_wider(names_from = closest_to_tma1, values_from = value) %>%
+  pivot_wider(names_from = two_sig_model, values_from = c(new_tma1, new_tma2))  %>%
+  rename_with( ~gsub( pattern = "new_", replacement = "", .x), starts_with("new_")) %>%
+   pivot_longer(cols = tma1_s1_list:tma2_s2_list, names_to = "model_and_tma") %>%
+    mutate(which_tma = str_sub(model_and_tma, start = 0, end = 4),
+         two_sig_model = str_sub(model_and_tma, start = 6, end = -1)) %>% 
+  select(-model_and_tma) %>%
+  pivot_wider(names_from = which_tma, values_from = value)
+  
+  
+sorted_tmas
+
+paper1_tmas # tma1 tma2 which_model
 
 ```
 
 
+
+Make violin raincloud plots for the DMSO and ADPribose tmas 
+```{r}
+paper1_tmas
+```
+```{r}
+control_tmas <- paper1_tma_DRCs %>%
+                filter(compound %in% c("DMSO", "ADPribose", "ADP-ribose")) %>%
+  mutate(compound, recode(compound, ADPribose = "ADP-ribose"))
+
+paper1_tma_DRCs$compound %>% table()
+```
+
+
+One-way ANOVA to determine if there is a DRC for each of these variables
+```{r}
+# First, include the DMSO average as the zero-point for each of the compounds
+
+```
+
+DMSO and ADP ribose statistics
+```{r}
+#### Isolate the relevant data
+
+  
+  
+has_compound_conc_col <-  map( dfs_protein_TAMRA , ~"compound_conc" %in% names(.x)  ) %>% as_vector() # just the channel of interest
+ADPr <-  map( dfs_protein_TAMRA ,
+                      ~filter(.x,  # for each tibble
+                              across(any_of("compound") | any_of("ZINC"), # if there's a compound or ZINC column
+                               ~.x == c("ADPribose")) )) %>% # keep ADPr
+          map(. , ~mutate_all(.x, as.character)) %>%
+          .[has_compound_conc_col] %>%
+          map(. , ~select(.x, c(Temperature, plate_number, value, compound_conc)) ) %>%
+          bind_rows() %>%
+          unite("plate_compound_conc", # name of new column
+                        plate_number, compound_conc, # unite these
+                        remove = FALSE) %>%
+          mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
+          mutate_at( . ,"compound_conc", as.numeric)
+
+#### Calculate correlation statstics--------
+ADPr_25_stats <- ADPr %>%
+                filter(Temperature == 25) %>%
+                group_by(plate_number) %>%
+                nest() %>%
+                  mutate(
+                  test = map(data, ~ cor.test(.x$compound_conc, .x$value)), # S3 list-col
+                  tidied = map(test, broom::tidy)) %>%
+                unnest(tidied)
+```
+
+Raw data for all paper 1 compounds
+```{r}
+paper1_raw_data <- with_compound_col %>%
+                      .[has_compound_conc_col] %>%
+                      map(. , ~select(.x, c(variable, condition, plate_number, compound, compound_conc, Temperature, value, value_norm)) ) %>%
+                      map(. , ~mutate_all(.x, as.character)) %>%
+
+                  
+                     bind_rows()  %>%
+                    ungroup()%>%
+                    mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
+                    mutate_at( . ,"compound_conc", as.numeric) %>%
+   left_join(paper1_cmpds_table %>% select(compound, `xtal hit`)) %>%
+  rename(xtal_hit = `xtal hit`)
+
+paper1_raw_data %>% head()
+
+paper1_raw_data %>%
+  filter(plate_number %in% c("Exp0868", "Exp0877_plate3", "Exp0877_plate4"),
+         !compound %in% c("NA", "6511", "8637", "9020")) %>% # three compounds not for this paper, and character-ized "NA"s
+
+ggplot( aes(x = Temperature, 
+            y = value_norm,
+            color = compound_conc,
+            group = variable
+            )) +
+  geom_line(alpha = 0.5, size = 0.2)+
+  xlim(c(44, 60))+
+  scale_color_viridis_c(trans = "log2", direction = -1) +
+  #ylim(c(49, 55)) +
+  #geom_linerange(aes(ymin = `Tma 1`  -tma1, ymax = tma1  + tma1_sd)) +
+  facet_wrap(~compound, scales = "fixed") +
+  labs( x = "Temperature (C)", y = "Normalized RFU", title = "Nsp3 Mac1 Fragments DSF data, Batch 1") -> p_raw 
+  ggsave("draft_figures/Exp0879--20200914_DRC_raw.pdf", p_raw, width = 15, height = 15)
+
+```
 
 Post analysis cleaning
 ```{r}
