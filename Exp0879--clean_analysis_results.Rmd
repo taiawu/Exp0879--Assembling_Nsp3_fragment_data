@@ -64,7 +64,7 @@ merge_elements <- function( in_list ) { # this runction could use some work to b
 
  #df_resids <- out[[3]]
 
-out_list <- list("model_tmas" = out[[1]][[2]],
+out_list <- list("model_tmas" = out[[1]][[1]][[2]],
                  "model_results" = out[[2]],
                  "resid" = out[[2]] %>% select(variable, which_model, resids) %>% unnest( cols = c(resids) ),
                  "dRFU_tmas" = dRFU_tmas,
@@ -85,13 +85,14 @@ results_extracted <- lapply(all_processed, merge_elements)
 results_extracted$Exp0827$model_tmas
 ```
 
-
-
 Read in analysis results
 ```{r}
 all_processed <- readRDS("analyzed/Exp0879--20200912_all_analyzed_results.rds") # all analysis results
 dfs_protein_EBPS <- readRDS("analyzed/Exp0879--20200912_all_dfs_list_no_empties.rds") # all raw data
 dfs_protein_TAMRA <- readRDS("analyzed/Exp0879--20200912_all_dfs_as_input_to_analysis.rds") # no EBPs and TAMRA only, fed directly to fitting function
+
+###### Clean up analysis results  ----------
+results_extracted <- lapply(all_processed, merge_elements)
 ```
 
 
@@ -225,22 +226,8 @@ ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_pooled.pdf", g_summary, 
 ```
 
 
-```{r}
-all_TAMRA %>% 
-```
-
-```{r}
-all_resids %>% head()
-
-results_extracted$Exp0827$resid
-```
-
-
 Criteria 2: by high residuals of the fits
 ```{r}
-###### Clean up analysis results  ----------
-results_extracted <- lapply(all_processed, merge_elements)
-
 ##### Isolate just the residuals and bind into single data frame
 all_resids <- lapply(results_extracted, `[[`,  j = "resid" ) %>%
                bind_rows() %>%
@@ -344,75 +331,69 @@ g_summary <- RFU_25 %>%
 # ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_pooled.pdf", g_summary, width = 7, height = 3)
 
 ```
-
+Isolate data for all paper 1 componds 
 ```{r}
-merge_test<- lapply(all_processed[1], merge_elements, )
+paper1_cmpds_table <- readxl::read_excel("Exp0879--20200912_fragments_for_paper1.xlsx") %>%
+  rename(ZINC = ID)
+paper1_cmpds_table
+paper1_cmpds <- paper1_cmpds_table$`Tube-label`
 
-all_processed$Exp0827$fits$s1_d_list$model
+results_extracted$Exp0827$model_tmas[[2]]
+all_model_tmas <- lapply(results_extracted, `[[`,  j = "model_tmas" ) %>%
+                  bind_rows()
+
+has_compound_conc_col <-  map( dfs_protein_TAMRA , ~"compound_conc" %in% names(.x)  ) %>% as_vector() 
+
+has_ZINC_col_only <-  map2( map( dfs_protein_TAMRA , ~"ZINC" %in% names(.x)  ) %>% as_vector(),
+                            map(dfs_protein_TAMRA , ~!"compound" %in% names(.x)  ) %>% as_vector(),
+                            all) %>% 
+                      as_vector()
+
+compound_col_added <- dfs_protein_TAMRA %>% 
+                      .[has_ZINC_col_only] %>%
+                       map(. , ~left_join(.x, paper1_cmpds_table %>% select(ZINC, `Tube-label`))) %>%
+                        map( . ,   ~rename( .x, compound = `Tube-label)) 
+
+with_compound_col$Exp0827
+
+with_compound_col <- c(dfs_protein_TAMRA[!has_ZINC_col_only], compound_col_added)
+
+has_compound_conc_col <- map( with_compound_col , ~"compound_conc" %in% names(.x)  ) %>% as_vector()
+
+layouts_all <- with_compound_col %>%
+                      .[has_compound_conc_col] %>%
+                      map(. , ~select(.x, c(condition, compound, compound_conc)) ) %>%
+                              bind_rows() %>%
+                              mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
+                              mutate_at( . ,"compound_conc", as.numeric)
+
+
+#                       
+# ## if there is only a ZINC column
+# 
+# ADPr <-  dfs_protein_TAMRA %>%
+#             .[has_compound_conc_col] %>% 
+#   map( dfs_protein_TAMRA ,
+#                       ~filter(.x,  # for each tibble
+#                               #across(any_of("compound") | any_of("ZINC"), # if there's a compound or ZINC column
+#                                ~.x %in% c("ADPribose")) )) %>% # keep ADPr
+#           map(. , ~mutate_all(.x, as.character)) %>%
+# 
+#           map(. , ~select(.x, c(Temperature, plate_number, value, compound_conc)) ) %>%
+#           bind_rows() %>%
+#           unite("plate_compound_conc", # name of new column
+#                         plate_number, compound_conc, # unite these
+#                         remove = FALSE) %>%
+#           mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
+#           mutate_at( . ,"compound_conc", as.numeric)
+
+
 ```
 
-
-
-
-Ultimately, move this to hit calling criteria exploration notebook
-Does ADP ribose consistently decrease the starting RFU?
 ```{r}
-#### Isolate the relevant data
-has_compound_conc_col <-  map( dfs_protein_TAMRA , ~"compound_conc" %in% names(.x)  ) %>% as_vector() # just the channel of interest
-ADPr <-  map( dfs_protein_TAMRA ,
-                      ~filter(.x,  # for each tibble
-                              across(any_of("compound") | any_of("ZINC"), # if there's a compound or ZINC column
-                               ~.x == c("ADPribose")) )) %>% # keep ADPr
-          map(. , ~mutate_all(.x, as.character)) %>%
-          .[has_compound_conc_col] %>%
-          map(. , ~select(.x, c(Temperature, plate_number, value, compound_conc)) ) %>%
-          bind_rows() %>%
-          unite("plate_compound_conc", # name of new column
-                        plate_number, compound_conc, # unite these
-                        remove = FALSE) %>%
-          mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
-          mutate_at( . ,"compound_conc", as.numeric)
-
-#### Calculate correlation statstics--------
-ADPr_25_stats <- ADPr %>%
-                filter(Temperature == 25) %>%
-                group_by(plate_number) %>%
-                nest() %>%
-                  mutate(
-                  test = map(data, ~ cor.test(.x$compound_conc, .x$value)), # S3 list-col
-                  tidied = map(test, broom::tidy)) %>%
-                unnest(tidied)
-
-##### Make the facet plat ---------
-experiment_labs <- paste0("Experiment ", 1:10)
-names(experiment_labs) <- ADPr$plate_number %>% unique()
-
-experiment_labs
-
-ADPr_vs_starting_val <- ADPr %>%
-  filter(Temperature == 25,
-         !plate_number %in% c("Exp0866_plate1", "Exp0866_plate2")) %>%
-                          ggplot(aes(x = compound_conc, y = value)) +
-                          geom_jitter( aes(group = plate_compound_conc), alpha = 0.5) +
-                           scale_x_continuous(trans = "log2", breaks = c(0, 10, 100,1000))  +
-                           facet_wrap(~plate_number,
-                                      labeller = labeller(plate_number = experiment_labs),
-                                      ncol = 4) +
-                            theme_bw() +
-  geom_boxplot(aes(group = plate_compound_conc), width = 1,  outlier.shape = NA, alpha = 0.5) +
-  geom_text(data = ADPr_25_stats %>% 
-                  filter(!plate_number %in% c("Exp0866_plate1", "Exp0866_plate2")), 
-            aes(x = 7, y = 8700, label = paste0("p = ", p.value %>% round(2)))) +
-  raincloud_theme +
-  theme(axis.text.x = element_text(angle = 90)) +
-  ylim(c(0, 10050))+
-  labs(title = "Initial RFU not correlated with [ADP ribose]\nAcross 8 independent experiments\n(Pearson's Correllation Coefficient> 0.05)",
-       y = "RFU (TAMRA, 535/580 nm)",
-       x = "[ADP ribose] (µM)") 
-
-
-ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_ADPr_not_correlated.pdf", ADPr_vs_starting_val, width = 7, height = 4)
+paper1_cmpds_table
 ```
+
 
 
 Post analysis cleaning
@@ -528,3 +509,64 @@ Main figure: dose-response for
                  # map( . , ~select( .x, -one_of("compound")))
 ```
 
+
+Ultimately, move this to hit calling criteria exploration notebook
+Does ADP ribose consistently decrease the starting RFU?
+```{r}
+###### DO NOT DELETE THIS!!!! ######
+#### Isolate the relevant data
+has_compound_conc_col <-  map( dfs_protein_TAMRA , ~"compound_conc" %in% names(.x)  ) %>% as_vector() # just the channel of interest
+ADPr <-  map( dfs_protein_TAMRA ,
+                      ~filter(.x,  # for each tibble
+                              across(any_of("compound") | any_of("ZINC"), # if there's a compound or ZINC column
+                               ~.x == c("ADPribose")) )) %>% # keep ADPr
+          map(. , ~mutate_all(.x, as.character)) %>%
+          .[has_compound_conc_col] %>%
+          map(. , ~select(.x, c(Temperature, plate_number, value, compound_conc)) ) %>%
+          bind_rows() %>%
+          unite("plate_compound_conc", # name of new column
+                        plate_number, compound_conc, # unite these
+                        remove = FALSE) %>%
+          mutate_all( . ,convert_numerics) %>% # this misses the compond conc column--is it because of decimal places??
+          mutate_at( . ,"compound_conc", as.numeric)
+
+#### Calculate correlation statstics--------
+ADPr_25_stats <- ADPr %>%
+                filter(Temperature == 25) %>%
+                group_by(plate_number) %>%
+                nest() %>%
+                  mutate(
+                  test = map(data, ~ cor.test(.x$compound_conc, .x$value)), # S3 list-col
+                  tidied = map(test, broom::tidy)) %>%
+                unnest(tidied)
+
+##### Make the facet plat ---------
+experiment_labs <- paste0("Experiment ", 1:10)
+names(experiment_labs) <- ADPr$plate_number %>% unique()
+
+experiment_labs
+
+ADPr_vs_starting_val <- ADPr %>%
+  filter(Temperature == 25,
+         !plate_number %in% c("Exp0866_plate1", "Exp0866_plate2")) %>%
+                          ggplot(aes(x = compound_conc, y = value)) +
+                          geom_jitter( aes(group = plate_compound_conc), alpha = 0.5) +
+                           scale_x_continuous(trans = "log2", breaks = c(0, 10, 100,1000))  +
+                           facet_wrap(~plate_number,
+                                      labeller = labeller(plate_number = experiment_labs),
+                                      ncol = 4) +
+                            theme_bw() +
+  geom_boxplot(aes(group = plate_compound_conc), width = 1,  outlier.shape = NA, alpha = 0.5) +
+  geom_text(data = ADPr_25_stats %>% 
+                  filter(!plate_number %in% c("Exp0866_plate1", "Exp0866_plate2")), 
+            aes(x = 7, y = 8700, label = paste0("p = ", p.value %>% round(2)))) +
+  raincloud_theme +
+  theme(axis.text.x = element_text(angle = 90)) +
+  ylim(c(0, 10050))+
+  labs(title = "Initial RFU not correlated with [ADP ribose]\nAcross 8 independent experiments\n(Pearson's Correllation Coefficient> 0.05)",
+       y = "RFU (TAMRA, 535/580 nm)",
+       x = "[ADP ribose] (µM)") 
+
+
+ggsave("cleaned_analysis/Exp0879--20200913_starting_RFU_ADPr_not_correlated.pdf", ADPr_vs_starting_val, width = 7, height = 4)
+```
